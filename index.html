@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html ng-app>
+<head>
+    <meta http-equiv="Content-type" content="text/html; charset=utf-8">
+    <title>Video Uploader</title>
+    <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/angularjs/1.0.5/angular.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style type="text/css">
+        #dropzone{
+            height: 300px;
+            width: 300px;
+            border: 10px dotted black;
+        }
+
+        #dropzone:hover{
+            background: yellow;
+        }
+    </style>
+</head>
+<body>
+<div ng-controller="UploadController">
+    <div id="dropzone">
+        <input type="file" id="browsezone"/>
+    </div>
+
+    <div>items</div>
+    <table>
+        <tr>
+            <th>title</th>
+            <th>progress</th>
+            <th>token</th>
+            <th>type</th>
+            <th>status</th>
+        </tr>
+        <tr ng-repeat="item in uploader.getItems()">
+            <td>{{ item.title }}</td>
+            <td>{{ item.progress }}</td>
+            <td>{{ item.token }}</td>
+            <td>{{ item.type }}</td>
+            <td>{{ item.status }}</td>
+        </tr>
+    </table>
+</div>
+
+<script type="text/javascript" charset="utf-8">
+    var Sekoia = {};
+    Sekoia.Uploader = {
+        location : 'localhost:1337',
+        socket : io.connect(location),
+        items : {},
+        getItems: function(){
+            return this.items;
+        },
+
+        activeItem : null,
+        sliceReader : new FileReader(),
+
+        // slizes are set to 10485760 bytes = 10 megabyte
+        chunkSize: 10485760,
+        dropzoneId : 'dropzone',
+        browsezoneId : 'browsezone',
+        init : function(){
+            this.dropzone = document.getElementById(this.dropzoneId)
+            this.dropzone.addEventListener("dragenter", this.eventHole, false);
+            this.dropzone.addEventListener("dragexit", this.eventHole, false);
+            this.dropzone.addEventListener("dragover", this.eventHole, false);
+            this.dropzone.addEventListener("drop", this.filesDropped, false);
+
+            this.browsezone = document.getElementById(this.browsezoneId)
+            this.browsezone.addEventListener('change', this.filesBrowsed);
+
+            //when a new slice is read it's send over the socket with the token of the active file
+            this.sliceReader.onload = function(event){
+                var item = Sekoia.Uploader.activeItem;
+                item.progress = Math.round((item.slicePointer * (100 / item.file.size)));
+                Sekoia.Uploader.socket.emit('SendSlice', { 'token' : item.token, 'slice' : event.target.result });
+            }
+
+            this.socket.on('WantSlice', function (sliceRequest){
+                var item = Sekoia.Uploader.items[sliceRequest['token']];
+                Sekoia.Uploader.activeItem = item;
+                item.slicePointer = sliceRequest['pointer'];
+                console.log(item.slicePointer);
+
+                var slice = item.file.slice(item.slicePointer, (item.slicePointer + sliceRequest['size']));
+                Sekoia.Uploader.sliceReader.readAsBinaryString(slice);
+            });
+
+            this.socket.on('FileCompleted', function (data){
+                var item = Sekoia.Uploader.items[data['token']];
+                item.status = 1;
+            });
+        },
+        sendNewFile: function(item){
+            this.activeItem = item;
+            this.socket.emit('NewFile', {
+                'checksum' : item.title,
+                'size' : item.file.size,
+                'token' : item.token,
+                'type' : item.type
+            });
+        },
+        filesDropped: function(event){
+            event.stopPropagation();
+            event.preventDefault();
+
+            var files = event.dataTransfer.files,
+                    fileCounter = files.length;
+
+            while(fileCounter--){
+                Sekoia.Uploader.addItem(files[fileCounter]);
+            }
+        },
+        filesBrowsed: function(event){
+            var files = event.target.files,
+                fileCounter = files.length;
+
+            while(fileCounter--){
+                Sekoia.Uploader.addItem(files[fileCounter]);
+            }
+        },
+        addItem:function(file){
+            var item = {
+                file: file,
+                type: file.name.split('.').pop(),
+                // cut the extension off of the the filename
+                title: file.name.slice(0, file.name.lastIndexOf('.')),
+                token: (file.name.slice(0, file.name.lastIndexOf('.')) + file.size),//this.canIhasToken(),
+                //checksum: this.canIhasChecksum(),
+                // guess the type of the file on the client side, should be verified on the server side
+
+                slicePointer: 0,
+                progress : 0,
+                // -1: idle, 0: uploading, 1: complete
+                status : -1
+            };
+
+            this.angularScope.$apply(function () {
+                Sekoia.Uploader.items[item.token] = item;
+            });
+
+            if(!this.activeItem){
+                this.sendNewFile(item);
+            }
+        },
+
+        // drop your unwanted events in this hole
+        eventHole: function(event){
+            event.stopPropagation();
+            event.preventDefault();
+        },
+
+        // the upload service should hand out a token, but this might be useful for testing purposes
+        canIhasToken: function(length){
+            var token = "",
+                    characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+                    characterCount = length || 16;
+            while(characterCount){
+                token += characters.charAt(Math.floor(Math.random() * 62));
+            }
+            return token;
+        },
+
+        // THIS IS NOT A REAL CHECKSUM
+        // I'm just returning the whole file or the bytes at the middle of the file encoded as utf-8
+        // this is used to check the uniqueness of a local file and prevent double uploads
+        canIhasChecksum:function(file){
+            var bytez,
+                    slicer = File.prototype.slice || File.prototype.mozSlice || File.prototype.webkitSlice,
+                    reader = new FileReader(),
+                    begin = 0,
+                    end = file.size;
+
+            //if the file is bigger then half a megabyte, use its middle part
+            if(end > 524288){
+                begin = Math.round((end / 2) - 262144);
+                end = begin + 524288;
+            }
+
+            bytez = slicer.call(file, begin, end);
+
+            // read as text, should default to utf-8
+            return reader.readAsText(bytez);
+        }
+
+    };
+
+    window.addEventListener("load", Ready);
+
+    function Ready(){
+        if(window.File && window.FileReader){
+            Sekoia.Uploader.init();
+
+        }
+        else
+        {
+            alert("Your Browser Doesn't Support The File API Please Update Your Browser");
+        }
+    };
+
+    function UploadController($scope){
+        $scope.uploader = Sekoia.Uploader;
+        Sekoia.Uploader.angularScope = $scope;
+    };
+</script>
+</body>
+</html>
