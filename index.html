@@ -43,8 +43,8 @@
 </div>
 
 <script type="text/javascript" charset="utf-8">
-    var Sekoia = {};
-    Sekoia.Uploader = {
+    var BramCo = {};
+    BramCo.Uploader = {
         location : 'localhost:1337',
         socket : io.connect(location),
         items : {},
@@ -69,30 +69,30 @@
 
             //when a new slice is read it's send over the socket with the token of the active file
             this.sliceReader.onload = function(event){
-                var item = Sekoia.Uploader.activeItem;
-                Sekoia.Uploader.angularScope.$apply(function () {
+                var item = BramCo.Uploader.activeItem;
+                BramCo.Uploader.angularScope.$apply(function () {
                     item.progress = Math.round((item.slicePointer * (100 / item.file.size)));
                 });
-                Sekoia.Uploader.socket.emit('SendSlice', { 'token' : item.token, 'slice' : event.target.result });
+                BramCo.Uploader.socket.emit('SendSlice', { 'token' : item.token, 'slice' : event.target.result });
             }
 
             this.socket.on('WantSlice', function (sliceRequest){
-                var item = Sekoia.Uploader.items[sliceRequest['token']];
-                Sekoia.Uploader.activeItem = item;
+                var item = BramCo.Uploader.items[sliceRequest['token']];
+                BramCo.Uploader.activeItem = item;
                 item.slicePointer = sliceRequest['pointer'];
 
                 var slice = item.file.slice(item.slicePointer, (item.slicePointer + sliceRequest['size']));
-                Sekoia.Uploader.sliceReader.readAsBinaryString(slice);
+                BramCo.Uploader.sliceReader.readAsBinaryString(slice);
             });
 
             this.socket.on('FileCompleted', function (data){
-                var item = Sekoia.Uploader.items[data['token']];
-                Sekoia.Uploader.angularScope.$apply(function () {
+                var item = BramCo.Uploader.items[data['token']];
+                BramCo.Uploader.angularScope.$apply(function () {
                     item.status = 1;
                     item.progress = 100;
-                    Sekoia.Uploader.activeItem = false;
+                    BramCo.Uploader.activeItem = false;
                 });
-                Sekoia.Uploader.sendNextFile();
+                BramCo.Uploader.sendNextFile();
             });
         },
         sendNextFile : function () {
@@ -121,7 +121,7 @@
                     fileCounter = files.length;
 
             while(fileCounter--){
-                Sekoia.Uploader.addItem(files[fileCounter]);
+                BramCo.Uploader.addItem(files[fileCounter]);
             }
         },
         filesBrowsed: function(event){
@@ -129,7 +129,7 @@
                 fileCounter = files.length;
 
             while(fileCounter--){
-                Sekoia.Uploader.addItem(files[fileCounter]);
+                BramCo.Uploader.addItem(files[fileCounter]);
             }
         },
         addItem:function(file){
@@ -149,7 +149,7 @@
             };
 
             this.angularScope.$apply(function () {
-                Sekoia.Uploader.items[item.token] = item;
+                BramCo.Uploader.items[item.token] = item;
             });
 
             if(!this.activeItem){
@@ -202,7 +202,7 @@
 
     function Ready(){
         if(window.File && window.FileReader){
-            Sekoia.Uploader.init();
+            BramCo.Uploader.init();
 
         }
         else
@@ -212,8 +212,8 @@
     };
 
     function UploadController($scope){
-        $scope.uploader = Sekoia.Uploader;
-        Sekoia.Uploader.angularScope = $scope;
+        $scope.uploader = BramCo.Uploader;
+        BramCo.Uploader.angularScope = $scope;
     };
 </script>
 </body>
