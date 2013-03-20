@@ -62,12 +62,12 @@ io.sockets.on('connection', function (socket) {
 				fs.write(file.handler, file.byteBuffer, null, 'Binary', function(err, Writen){
 					var inp = fs.createReadStream('temp/' + file.token + '.' + file.type);
 					var out = fs.createWriteStream('comp/' + file.token + '.' + file.type);
-					util.pump(inp, out, function(){
-						fs.unlink('temp/' + file.token + '.' + file.type, function () {
+                    inp.pipe(out, {});
+                    out.end = function(){
+                        fs.unlink('temp/' + file.token + '.' + file.type, function () {
                             // you can hook up other services here
                             socket.emit('FileCompleted', {'token' : file.token});
-						});
-					});
+                        })};
 				});
 			}
 			else if(file.byteBuffer.length > 10485760){ //If the Data Buffer reaches 10MB
