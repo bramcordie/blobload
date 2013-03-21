@@ -71,7 +71,7 @@
             this.sliceReader.onload = function(event){
                 var item = BramCo.Uploader.activeItem;
                 BramCo.Uploader.angularScope.$apply(function () {
-                    item.progress = Math.round((item.slicePointer * (100 / item.file.size)));
+                    item.progress = Math.round((item.slicePointer / item.file.size) * 100);
                 });
                 BramCo.Uploader.socket.emit('SendSlice', { 'token' : item.token, 'slice' : event.target.result });
             }
@@ -80,8 +80,12 @@
                 var item = BramCo.Uploader.items[sliceRequest['token']];
                 BramCo.Uploader.activeItem = item;
                 item.slicePointer = sliceRequest['pointer'];
-
-                var slice = item.file.slice(item.slicePointer, (item.slicePointer + sliceRequest['size']));
+                var sliceEnd = (item.slicePointer + sliceRequest['size']);
+                    if( sliceEnd > item.file.size ) {
+                        sliceEnd = item.file.size;
+                    }
+                console.log("sending slice from byte: " + item.slicePointer + " to " + sliceEnd);
+                var slice = item.file.slice(item.slicePointer, sliceEnd);
                 BramCo.Uploader.sliceReader.readAsBinaryString(slice);
             });
 
@@ -163,26 +167,15 @@
             event.preventDefault();
         },
 
-        // the upload service should hand out a token, but this might be useful for testing purposes
-        canIhasToken: function(length){
-            var token = "",
-                    characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
-                    characterCount = length || 16;
-            while(characterCount){
-                token += characters.charAt(Math.floor(Math.random() * 62));
-            }
-            return token;
-        },
-
         // THIS IS NOT A REAL CHECKSUM
         // I'm just returning the whole file or the bytes at the middle of the file encoded as utf-8
         // this is used to check the uniqueness of a local file and prevent double uploads
         canIhasChecksum:function(file){
             var bytez,
-                    slicer = File.prototype.slice || File.prototype.mozSlice || File.prototype.webkitSlice,
-                    reader = new FileReader(),
-                    begin = 0,
-                    end = file.size;
+                slicer = File.prototype.slice || File.prototype.mozSlice || File.prototype.webkitSlice,
+                reader = new FileReader(),
+                begin = 0,
+                end = file.size;
 
             //if the file is bigger then half a megabyte, use its middle part
             if(end > 524288){
