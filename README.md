@@ -1,9 +1,14 @@
 blobload
 ========
 
-HTML5 file uploader using blob.
+HTML5 file uploader using blob and Node.js.
 
 ## Before you upload your blob
+
+### Dependecies
+Run `npm install socket.io` to install [Socket.io](http://socket.io/).
+
+### Directories
 Create a temp(orary) and comp(leted) folder in the same directory as the app.js file.
 
 ## Checksum
