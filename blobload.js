@@ -177,11 +177,6 @@ function cleanUp(){
  * TODO: doc
  */
 function processSlice(socket, data){
-    console.log('************************');
-    console.log('************************');
-    console.log(data);
-    console.log('************************');
-    console.log('************************');
     var file = Files[data['token']];
     if(! file){
         socket.emit('encounteredError', {'error': 'File not found', 'data': data});
