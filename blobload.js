@@ -23,16 +23,16 @@ var eventDispatcher = new EventEmitter();
 var Files = {};
 
 /**
- * The web page access status code.
- * @type {string}
+ * The HTTP access status code.
+ * @type {number}
  */
-var webPageAccessStatus = "501";
+var httpAccessStatusCode = 501;
 
 /**
- * The web page access body content.
+ * The HTTP access content.
  * @type {string}
  */
-var webPageAccessContent = "Error: the blobload server hasn't been started yet";
+var httpAccessContent = "Error: the blobload server hasn't been started yet";
 
 /**
  * The port this blobload instance is currently set to be running on.
@@ -73,22 +73,34 @@ var httpServer;
  * The current total buffer size.
  * @type {number}
  */
-var totalBufferSize = 0;
+var currentTotalBufferSize = 0;
 
 /**
- * Get the web page access status code.
- * @returns {string}
+ * The maximum number of connections allowed.
+ * @type {number}
  */
-function getWebPageAccessStatus(){
-    return webPageAccessStatus;
+var maxConnectionsAllowed;
+
+/**
+ * The current number of connected clients.
+ * @type {number}
+ */
+var currentNbOfConnections = 0;
+
+/**
+ * Get the HTTP access status code.
+ * @returns {number}
+ */
+function getHttpAccessStatusCode(){
+    return httpAccessStatusCode;
 }
 
 /**
- * Get the web page access body content.
+ * Get the HTTP access content.
  * @returns {string}
  */
-function getWebPageAccessContent(){
-    return webPageAccessContent;
+function getHttpAccessContent(){
+    return httpAccessContent;
 }
 
 /**
@@ -108,7 +120,8 @@ function processNewUpload(socket, data){
             size	 : data['size'],
             bytePointer : 0,
             type : data['type'],
-            byteBuffer: ''       // initialization of the byte buffer is necessary
+            byteBuffer: '',       // initialization of the byte buffer is necessary
+            lastUpdated: Date.now()
         }
     }
 
@@ -133,66 +146,99 @@ function processNewUpload(socket, data){
     });
 }
 
+var cleanupActive = false;
+
+var bufferBackupTimeInSeconds;
+
+function cleanUp(){
+    if(cleanupActive){
+        return;
+    }
+
+    cleanupActive = true;
+
+    eventDispatcher.emit('bufferCleanUpStarted');
+
+    for(var file in Files){
+        var expiryDate = new Date(file.lastUpdated).setSeconds(file.lastUpdated.getSeconds() + bufferBackupTimeInSeconds);
+        if(Date.now() > expiryDate){
+            eventDispatcher.emit('foundExpiredUpload', {'file' : file});
+            delete file; // TODO: check if ok or should be replaced with delete by token
+            //TODO: try deleting temp file
+        }
+    }
+
+    eventDispatcher.emit('bufferCleanUpFinished');
+
+    cleanupActive = false;
+}
+
 /**
  * TODO: doc
- * @param data
- * @param socket
  */
-function processSlice(data, socket){
+function processSlice(socket, data){
+    console.log('************************');
+    console.log('************************');
+    console.log(data);
+    console.log('************************');
+    console.log('************************');
     var file = Files[data['token']];
-
     if(! file){
-        socket.emit('EncounteredError', {'error': 'File not found', 'data': data});
+        socket.emit('encounteredError', {'error': 'File not found', 'data': data});
         return;
     }
 
-    if(data.sliceNumber == null){
-        socket.emit('EncounteredError', {'error': 'No sliceNumber received', 'data': data});
+    if(data.bytePointer == null){
+        socket.emit('encounteredError', {'error': 'No pointer received', 'data': data});
         return;
     }
 
-    if(data.sliceNumber != file.bytePointer){
+    if(data.bytePointer != file.bytePointer){
         socket.emit('WantSlice', { 'token' : file.token, 'pointer' : file.bytePointer, 'size' : sliceSize});
         return;
     }
 
+    if(data.checksum != Files[data['token']].checksum){
+        socket.emit('encounteredError', {'error': 'Invalid checksum', 'data': data});
+        return;
+    }
+
     file.byteBuffer += data['slice'];
+    file.lastUpdated = Date.now();
     file.bytePointer += sliceSize;
-    totalBufferSize += sliceSize;
+    currentTotalBufferSize += sliceSize;
 
-    // if upload is completed...
-    if(file.bytePointer >= file.size) {
+    // if the buffer should be flushed...
+    if(file.byteBuffer.length > dataBufferLimit || file.bytePointer >= file.size){
         fs.write(file.handler, file.byteBuffer, null, 'Binary', function(err, written, buffer){
             if(err){
-                socket.emit('EncounteredError', {'error': 'An error occurred while finalizing the uploaded file', 'data': data});
+                socket.emit('encounteredError', {'error': 'An error occurred while flushing the buffer', 'data': data});
                 return;
             }
-            var finalFilePath = storageFolderPath + file.token + '.' + file.type;
-            var inp = fs.createReadStream(tempFolderPath + file.token + '.' + file.type);
-            var out = fs.createWriteStream(finalFilePath);
-            inp.pipe(out, {});
-            out.end = function(){
-                fs.unlink(tempFolderPath + file.token + '.' + file.type, function () {
-                    // you can hook up other services here
-                    socket.emit('FileCompleted', {'token' : file.token});
-                    eventDispatcher.emit('NewFileCompletelyUploaded', {"path": finalFilePath, "checksum" : file.checksum, "size"	 : file['size'], "type" : file.type});
-                })};
-        });
-    }
-    // if buffer should be flushed...
-    else if(file.byteBuffer.length > dataBufferLimit){
-        fs.write(file.handler, file.byteBuffer, null, 'Binary', function(err, written, buffer){
-            if(err){
-                socket.emit('EncounteredError', {'error': 'An error occurred while flushing the buffer', 'data': data});
-                return;
-            }
-            // TODO: if statement for error
+            var bufferSize = file.byteBuffer.length;
             file.byteBuffer = "";
-            socket.emit('WantSlice', { 'token' : file.token, 'pointer' : file.bytePointer, 'size' : sliceSize});
-        });
+            currentTotalBufferSize -= bufferSize;
 
+            // if upload is completed...
+            if(file.bytePointer >= file.size) {
+                var finalFilePath = storageFolderPath + file.token + '.' + file.type;
+                var inp = fs.createReadStream(tempFolderPath + file.token + '.' + file.type);
+                var out = fs.createWriteStream(finalFilePath);
+                inp.pipe(out, {});
+                out.end = function(){
+                    delete Files[file.token];
+                    fs.unlink(tempFolderPath + file.token + '.' + file.type, function () {
+                        socket.emit('fileCompleted', {'token' : file.token});
+                        eventDispatcher.emit('newFileCompletelyUploaded', {"path": finalFilePath, "checksum" : file.checksum, "size"	 : file['size'], "type" : file.type});
+                    });
+                };
+            }
+            else{
+                socket.emit('WantSlice', { 'token' : file.token, 'pointer' : file.bytePointer, 'size' : sliceSize});
+            }
+        });
     }
-    else {
+    else{
         socket.emit('WantSlice', { 'token' : file.token, 'pointer' : file.bytePointer, 'size' : sliceSize});
     }
 }
@@ -200,57 +246,72 @@ function processSlice(data, socket){
 /**
  * Create a blobload server.
  * @param port The port this blobload instance is to start running on.
- * @param sliceSizeToSet
- * @param dataBufferLimitToSet
- * @param tempFolderNameToSet
- * @param storageFolderNameToSet
- * @param tokenValidator
+ * @param ...
  *
  * TODO: doc
  */
-exports.create = function (port, sliceSizeToSet, dataBufferLimitToSet, tempFolderNameToSet, storageFolderNameToSet, tokenValidator){
-
+exports.setup = function (port, sliceSizeToSet, dataBufferLimitToSet, maxConnectionsToSet, bufferBackupTimeInSecondsToSet, tempFolderNameToSet, storageFolderNameToSet, authorizer){
     sliceSize = sliceSizeToSet > 0 ? sliceSizeToSet : 524288;
     dataBufferLimit = dataBufferLimitToSet > sliceSize ? dataBufferLimitToSet : 10485760; //10MB
     storageFolderPath = storageFolderNameToSet ? ((storageFolderNameToSet.charAt(storageFolderNameToSet.length -1) == '/') ? storageFolderNameToSet : (storageFolderNameToSet + '/')) :  "completed/";
     tempFolderPath = tempFolderNameToSet ? (tempFolderNameToSet.charAt(tempFolderNameToSet.length -1) == '/') ? tempFolderNameToSet : (tempFolderNameToSet + '/') : "temp/";
+    maxConnectionsAllowed = maxConnectionsToSet > 0 ? maxConnectionsToSet : 50;
+    bufferBackupTimeInSeconds = bufferBackupTimeInSecondsToSet > 0 ? bufferBackupTimeInSecondsToSet : 3600;
 
-    this.setWebPageAccessContent(505, "This ain't no web server");
+    this.setHttpAccessContent(505, "This ain't no web server");
 
-    // create an all purpose validator if none is provided
-    if(! tokenValidator){
-        tokenValidator = function(token, checksum, callback){
-            callback(true);
+    // create an all purpose authorizer if none is provided
+    if(! authorizer){
+        authorizer = function(token, callback){
+            callback(null, true);
         }
     }
 
     httpServer = http.createServer(function (req, res) {
-        eventDispatcher.emit("WebPageAccessDetected");
-        res.writeHead(getWebPageAccessStatus());
-        return res.end(getWebPageAccessContent());
+        eventDispatcher.emit("webPageAccessDetected");
+        res.writeHead(getHttpAccessStatusCode());
+        return res.end(getHttpAccessContent());
     });
 
-    var ioSockets = io.listen(httpServer).sockets;
+    var ioServer = io.listen(httpServer);
 
-    ioSockets.on('connection', function (socket) {
-        socket.on('NewFile', function (data) {
-            if(Files[data['token']] && Files[data['token']].tokenVerified){
-                processNewUpload(socket, data);
+    ioServer.configure(function (){
+        ioServer.set('authorization', function (handshakeData, callback) {
+            if(currentNbOfConnections > maxConnectionsAllowed){
+                callback('Too many connections', false);
+            }
+
+            if(! (handshakeData.query.token) ){
+                callback('No authorization data received', false);
             }
             else{
-                tokenValidator(
-                    data['token'],
-                    data['checksum'],
-                    function(isValidToken, err){
-                        isValidToken ? processNewUpload(socket, data) : socket.emit('EncounteredError', {'error': err, 'result': 'Token validation failed', 'data': data});
+                authorizer(handshakeData.query.token, function(err){
+                    if(err){
+                        callback('Authorization failed', false);
                     }
-                );
+                    else{
+                        callback(null, true);
+                    }
+                });
             }
+        });
+    });
+
+    ioServer.sockets.on('connection', function (socket) {
+
+        socket.on('NewFile', function (data) {
+            processNewUpload(socket, data);
         });
 
         socket.on('SendSlice', function (data){
-            processSlice(data, socket);
+            processSlice(socket, data);
         });
+
+        socket.on('disconnect', function () {
+            currentNbOfConnections--;
+        });
+
+        currentNbOfConnections++;
     });
 
     return this;
@@ -268,9 +329,9 @@ exports.start = function(){
     return this;
 }
 
-exports.setWebPageAccessContent = function(status, content){
-    webPageAccessStatus = status;
-    webPageAccessContent = content;
+exports.setHttpAccessContent = function(status, content){
+    httpAccessStatusCode = status;
+    httpAccessContent = content;
     return this;
 }
 
