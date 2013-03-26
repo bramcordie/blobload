@@ -19,26 +19,7 @@ require('fs').readFile(__dirname + '/index.html', function (err, data) {
             console.log("Server started");
         });
 
-        // test section -------------
-        //
-        //
-        blobloadServer.eventDispatcher.on("bufferCleanUpStarted", function(){
-            console.log("buffer cleanup started");
-        });
-
-        blobloadServer.eventDispatcher.on("bufferCleanUpFinished", function(){
-            console.log("buffer cleanup finished");
-        });
-
-        blobloadServer.eventDispatcher.on("foundExpiredUpload", function(file){
-            console.log(file);
-        });
-        //
-        //
-        // end test section ---------
-
-        blobloadServer.setup(1337, 0, 0, 1, 10, null, null, null);
-        blobloadServer.setHttpAccessContent(200, data);
-        blobloadServer.start();
+        // We can chain the function calls to setup and start the blobload server
+        blobloadServer.setup(1337, 0, 0, 3, 10, null, null, null).setHttpAccessData(200, data).start();
     }
 });
